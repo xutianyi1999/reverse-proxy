@@ -39,7 +39,7 @@ async fn process(conn: Connecting) -> Result<()> {
   let mut socket = conn.await.res_convert(|_| "Connection error".to_string())?;
   let mut uni = socket.uni_streams;
 
-  let init_config = match uni.next().await {
+  let (init_config, mut rx) = match uni.next().await {
     Some(res) => {
       match res {
         Ok(mut recv_stream) => {
@@ -47,7 +47,7 @@ async fn process(conn: Connecting) -> Result<()> {
           let mut buff = vec![0u8; len as usize];
           recv_stream.read_exact(&mut buff).await.res_convert(|_| "init error".to_string());
           let init_config: InitConfig = serde_json::from_slice(&buff).res_auto_convert()?;
-          init_config
+          (init_config, recv_stream)
         }
         Err(_) => return Err(Error::new(ErrorKind::Other, init_error_msg))
       }
@@ -63,7 +63,7 @@ async fn process(conn: Connecting) -> Result<()> {
     _ => return Err(Error::new(ErrorKind::Other, config_error_msg))
   }
 
-  let _ = uni.next().await;
+  rx.read_unordered().await;
   notify.notify();
   info!("{:?} disconnect", remote_addr);
   Ok(())
@@ -81,6 +81,8 @@ fn tcp_server_handler(bind_port: u16, notify: Arc<Notify>, quic_connection: Conn
       };
 
       while let Ok((mut socket, _)) = listener.accept().await {
+        println!("new");
+
         let inner_connection = quic_connection.clone();
 
         tokio::spawn(async move {
@@ -97,6 +99,7 @@ fn tcp_server_handler(bind_port: u16, notify: Arc<Notify>, quic_connection: Conn
           let f1 = tokio::io::copy(&mut quic_rx, &mut tcp_tx);
           let f2 = tokio::io::copy(&mut tcp_rx, &mut quic_tx);
 
+          println!("-----------------");
           tokio::select! {
              _ = f1 => (),
              _ = f2 => ()
