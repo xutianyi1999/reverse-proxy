@@ -42,17 +42,17 @@ async fn process(endpoint: &Endpoint, remote_addr: SocketAddr,
 
   const HEART_BEAT: Bytes = Bytes::from_static(&[0u8; 1]);
 
-  // tokio::spawn(async move {
-  //   let mut interval = time::interval(time::Duration::from_secs(3));
-  //
-  //   loop {
-  //     interval.tick().await;
-  //     if let Err(e) = connection.send_datagram(HEART_BEAT) {
-  //       error!("{}", e);
-  //       return;
-  //     }
-  //   }
-  // });
+  tokio::spawn(async move {
+    let mut interval = time::interval(time::Duration::from_secs(3));
+
+    loop {
+      interval.tick().await;
+      if let Err(e) = connection.send_datagram(HEART_BEAT) {
+        error!("{}", e);
+        return;
+      }
+    }
+  });
 
   while let Some(res) = conn.bi_streams.next().await {
     println!("new");

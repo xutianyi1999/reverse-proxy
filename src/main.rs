@@ -31,8 +31,8 @@ async fn main() -> Result<()> {
                               "C:\\Users\\xutia\\Desktop\\rs-proxy-dic\\key\\cert.der",
                               "C:\\Users\\xutia\\Desktop\\rs-proxy-dic\\key\\priv_key").await?,
     "client" => {
-      let init_config = InitConfig { protocol: 1, bind_port: 443 };
-      client::start("0.0.0.0:12344", "127.0.0.1:12345", "www.bilibili.com:443",
+      let init_config = InitConfig { protocol: 1, bind_port: 12333 };
+      client::start("0.0.0.0:12344", "127.0.0.1:12345", "127.0.0.1:18888",
                     "C:\\Users\\xutia\\Desktop\\rs-proxy-dic\\key\\cert.der", "proxy", init_config).await?;
     }
     _ => return Err(Error::new(ErrorKind::Other, "CMD error"))

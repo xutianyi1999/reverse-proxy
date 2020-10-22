@@ -81,8 +81,6 @@ fn tcp_server_handler(bind_port: u16, notify: Arc<Notify>, quic_connection: Conn
       };
 
       while let Ok((mut socket, _)) = listener.accept().await {
-        println!("new");
-
         let inner_connection = quic_connection.clone();
 
         tokio::spawn(async move {
@@ -99,7 +97,6 @@ fn tcp_server_handler(bind_port: u16, notify: Arc<Notify>, quic_connection: Conn
           let f1 = tokio::io::copy(&mut quic_rx, &mut tcp_tx);
           let f2 = tokio::io::copy(&mut tcp_rx, &mut quic_tx);
 
-          println!("-----------------");
           tokio::select! {
              _ = f1 => (),
              _ = f2 => ()
