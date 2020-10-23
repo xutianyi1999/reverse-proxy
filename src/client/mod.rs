@@ -5,6 +5,7 @@ use quinn::Endpoint;
 use tokio::io::{AsyncWriteExt, Error, ErrorKind, Result};
 use tokio::net::TcpStream;
 use tokio::stream::StreamExt;
+use tokio::sync::Notify;
 use tokio::time;
 
 use crate::commons::{InitConfig, OptionConvert, ProxyConfig, quic_config, StdResAutoConvert, StdResConvert};
@@ -61,6 +62,8 @@ pub async fn start(remote_addr: &str, cert_path: &str, server_name: &str, list: 
       }
     });
   }
+  let notify = Notify::new();
+  notify.notified().await;
   Ok(())
 }
 
@@ -68,6 +71,8 @@ async fn process(endpoint: &Endpoint, remote_addr: SocketAddr,
                  proxy_addr: SocketAddr, server_name: &str, init_config: InitConfig) -> Result<()> {
   let mut conn = endpoint.connect(&remote_addr, server_name)
     .res_convert(|_| "Connection error".to_string())?.await?;
+
+  info!("Connect {:?} success", proxy_addr);
 
   let connection = conn.connection;
   let mut uni = connection.open_uni().await?;
@@ -90,7 +95,6 @@ async fn process(endpoint: &Endpoint, remote_addr: SocketAddr,
   });
 
   while let Some(res) = conn.bi_streams.next().await {
-    println!("new");
     let (mut quic_tx, mut quic_rx) = match res {
       Ok(v) => v,
       Err(_) => return Err(Error::new(ErrorKind::Other, "Remote close"))

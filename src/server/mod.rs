@@ -18,6 +18,8 @@ pub async fn start(addr: &str, cert_path: &str, priv_key_path: &str) -> Result<(
   let (_, mut incoming) = build.bind(&bind_addr)
     .res_convert(|_| "Quic server bind error".to_string())?;
 
+  info!("Bind {:?}", bind_addr);
+
   while let Some(conn) = incoming.next().await {
     tokio::spawn(async move {
       if let Err(e) = process(conn).await {
