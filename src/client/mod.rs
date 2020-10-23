@@ -11,7 +11,7 @@ use crate::commons::{InitConfig, OptionConvert, ProxyConfig, quic_config, StdRes
 use crate::commons;
 
 pub async fn start(remote_addr: &str, cert_path: &str, server_name: &str, list: Vec<ProxyConfig>) -> Result<()> {
-  let client_config = quic_config::configure_client(vec![cert_path.to_string()]).await?;
+  let client_config = quic_config::configure_client(cert_path).await?;
   let mut builder = Endpoint::builder();
 
   builder.default_client_config(client_config);

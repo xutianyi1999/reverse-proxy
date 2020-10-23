@@ -1,5 +1,5 @@
 {
   "bind_addr": "0.0.0.0:12345",
-  "cert_path": "",
-  "priv_key_path": ""
+  "cert_path": "./cfg-example/cert.pem",
+  "priv_key_path": "./cfg-example/priv.key"
 }
