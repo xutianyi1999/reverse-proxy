@@ -1,0 +1,5 @@
+{
+  "bind_addr": "0.0.0.0:12345",
+  "cert_path": "",
+  "priv_key_path": ""
+}

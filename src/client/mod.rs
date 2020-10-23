@@ -2,31 +2,66 @@ use std::net::{SocketAddr, ToSocketAddrs};
 
 use bytes::Bytes;
 use quinn::Endpoint;
-use tokio::io::{Error, ErrorKind, Result, AsyncWriteExt};
+use tokio::io::{AsyncWriteExt, Error, ErrorKind, Result};
 use tokio::net::TcpStream;
 use tokio::stream::StreamExt;
 use tokio::time;
 
-use crate::commons::{InitConfig, OptionConvert, quic_config, StdResConvert};
+use crate::commons::{InitConfig, OptionConvert, ProxyConfig, quic_config, StdResAutoConvert, StdResConvert};
+use crate::commons;
 
-pub async fn start(bind_addr: &str, remote_addr: &str, proxy_addr: &str,
-                   cert_path: &str, server_name: &str, init_config: InitConfig) -> Result<()> {
+pub async fn start(remote_addr: &str, cert_path: &str, server_name: &str, list: Vec<ProxyConfig>) -> Result<()> {
   let client_config = quic_config::configure_client(vec![cert_path.to_string()]).await?;
   let mut builder = Endpoint::builder();
 
   builder.default_client_config(client_config);
 
-  let (endpoint, _) = builder.bind(&bind_addr.to_socket_addrs()?.next().option_to_res("Address error")?)
+  let bind_addr: SocketAddr = "0.0.0.0:0".parse().res_auto_convert()?;
+  let (endpoint, _) = builder.bind(&bind_addr)
     .res_convert(|_| "client bind error".to_string())?;
 
   let remote_addr = remote_addr.to_socket_addrs()?.next().option_to_res("Address error")?;
-  let proxy_addr = proxy_addr.to_socket_addrs()?.next().option_to_res("Address error")?;
 
-  loop {
-    if let Err(e) = process(&endpoint, remote_addr, proxy_addr, server_name, init_config).await {
-      error!("{}", e);
-    }
+  for proxy_config in list {
+    let server_name = server_name.to_string();
+    let endpoint = endpoint.clone();
+
+    tokio::spawn(async move {
+      let protocol = match proxy_config.protocol.as_str() {
+        "tcp" => commons::TCP,
+        "udp" => commons::UDP,
+        _ => {
+          error!("Proxy config error");
+          return;
+        }
+      };
+
+      let op = match tokio::net::lookup_host(proxy_config.proxy_addr).await {
+        Ok(mut v) => v.next(),
+        Err(e) => {
+          error!("{}", e);
+          return;
+        }
+      };
+
+      let proxy_addr = match op {
+        Some(v) => v,
+        None => {
+          error!("Bind address error");
+          return;
+        }
+      };
+
+      let init_config = InitConfig { protocol, bind_port: proxy_config.remote_port };
+
+      loop {
+        if let Err(e) = process(&endpoint, remote_addr, proxy_addr, &server_name, init_config).await {
+          error!("{}", e);
+        }
+      }
+    });
   }
+  Ok(())
 }
 
 async fn process(endpoint: &Endpoint, remote_addr: SocketAddr,
@@ -75,9 +110,9 @@ async fn process(endpoint: &Endpoint, remote_addr: SocketAddr,
       let f2 = tokio::io::copy(&mut quic_rx, &mut local_tx);
 
       tokio::select! {
-      _ = f1 => (),
-      _ = f2 => ()
-    }
+        _ = f1 => (),
+        _ = f2 => ()
+      }
     });
   }
   Ok(())

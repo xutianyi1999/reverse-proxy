@@ -1,0 +1,12 @@
+{
+  "server_addr": "127.0.0.1:12345",
+  "cert_path": "",
+  "server_name": "proxy",
+  "proxy": [
+    {
+      "protocol": "tcp",
+      "proxy_addr": "",
+      "remote_port": 1888
+    }
+  ]
+}

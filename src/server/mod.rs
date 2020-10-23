@@ -1,24 +1,21 @@
-use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::Arc;
 
-use quinn::{Connecting, Endpoint, EndpointBuilder, Connection};
-use tokio::io::{Error, ErrorKind, Result, AsyncReadExt};
+use quinn::{Connecting, Connection, Endpoint};
+use tokio::io::{AsyncReadExt, Error, ErrorKind, Result};
 use tokio::net::TcpListener;
 use tokio::stream::StreamExt;
-use tokio::sync::Barrier;
 use tokio::sync::Notify;
 
 use crate::commons::{InitConfig, OptionConvert, quic_config, StdResAutoConvert, StdResConvert};
 use crate::commons;
-use quinn::crypto::rustls::TlsSession;
 
 pub async fn start(addr: &str, cert_path: &str, priv_key_path: &str) -> Result<()> {
   let sever_config = quic_config::configure_server(cert_path, priv_key_path).await.res_auto_convert()?;
   let mut build = Endpoint::builder();
   build.listen(sever_config);
 
-  let local_addr: SocketAddr = addr.to_socket_addrs()?.next().option_to_res("Address error")?;
-  let (_, mut incoming) = build.bind(&local_addr)
+  let bind_addr = tokio::net::lookup_host(addr).await?.next().option_to_res("Bind address error")?;
+  let (_, mut incoming) = build.bind(&bind_addr)
     .res_convert(|_| "Quic server bind error".to_string())?;
 
   while let Some(conn) = incoming.next().await {
@@ -34,9 +31,8 @@ pub async fn start(addr: &str, cert_path: &str, priv_key_path: &str) -> Result<(
 async fn process(conn: Connecting) -> Result<()> {
   let remote_addr = conn.remote_address();
   let init_error_msg = format!("{:?} init error", remote_addr);
-  let config_error_msg = format!("{:?} config error", remote_addr);
 
-  let mut socket = conn.await.res_convert(|_| "Connection error".to_string())?;
+  let socket = conn.await.res_convert(|_| format!("{:?} connection error", remote_addr))?;
   let mut uni = socket.uni_streams;
 
   let (init_config, mut rx) = match uni.next().await {
@@ -45,7 +41,7 @@ async fn process(conn: Connecting) -> Result<()> {
         Ok(mut recv_stream) => {
           let len = recv_stream.read_u16().await?;
           let mut buff = vec![0u8; len as usize];
-          recv_stream.read_exact(&mut buff).await.res_convert(|_| "init error".to_string());
+          let _ = recv_stream.read_exact(&mut buff).await.res_convert(|_| init_error_msg.clone());
           let init_config: InitConfig = serde_json::from_slice(&buff).res_auto_convert()?;
           (init_config, recv_stream)
         }
@@ -60,10 +56,10 @@ async fn process(conn: Connecting) -> Result<()> {
   match init_config.protocol {
     commons::TCP => tcp_server_handler(init_config.bind_port, notify.clone(), socket.connection),
     commons::UDP => {}
-    _ => return Err(Error::new(ErrorKind::Other, config_error_msg))
+    _ => return Err(Error::new(ErrorKind::Other, format!("{:?} config error", remote_addr)))
   }
 
-  rx.read_unordered().await;
+  let _ = rx.read_unordered().await;
   notify.notify();
   info!("{:?} disconnect", remote_addr);
   Ok(())

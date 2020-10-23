@@ -1,5 +1,5 @@
-use tokio::io::{Result, Error, ErrorKind};
 use serde::{Deserialize, Serialize};
+use tokio::io::{Error, ErrorKind, Result};
 
 pub mod quic_config;
 
@@ -14,11 +14,11 @@ impl<T> OptionConvert<T> for Option<T> {
 }
 
 pub trait StdResConvert<T, E> {
-  fn res_convert(self, f: fn(E) -> String) -> Result<T>;
+  fn res_convert(self, f: impl Fn(E) -> String) -> Result<T>;
 }
 
 impl<T, E> StdResConvert<T, E> for std::result::Result<T, E> {
-  fn res_convert(self, f: fn(E) -> String) -> Result<T> {
+  fn res_convert(self, f: impl Fn(E) -> String) -> Result<T> {
     std_res_convert(self, f)
   }
 }
@@ -40,7 +40,7 @@ fn option_convert<T>(o: Option<T>, msg: &str) -> Result<T> {
   }
 }
 
-fn std_res_convert<T, E>(res: std::result::Result<T, E>, f: fn(E) -> String) -> Result<T> {
+fn std_res_convert<T, E>(res: std::result::Result<T, E>, f: impl Fn(E) -> String) -> Result<T> {
   match res {
     Ok(v) => Ok(v),
     Err(e) => {
@@ -58,4 +58,29 @@ pub const UDP: u8 = 2;
 pub struct InitConfig {
   pub protocol: u8,
   pub bind_port: u16,
+}
+
+#[derive(Serialize, Deserialize)]
+#[derive(Clone)]
+pub struct ClientConfig {
+  pub server_addr: String,
+  pub cert_path: String,
+  pub server_name: String,
+  pub proxy: Vec<ProxyConfig>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[derive(Clone)]
+pub struct ProxyConfig {
+  pub protocol: String,
+  pub proxy_addr: String,
+  pub remote_port: u16,
+}
+
+#[derive(Serialize, Deserialize)]
+#[derive(Clone)]
+pub struct ServerConfig {
+  pub bind_addr: String,
+  pub cert_path: String,
+  pub priv_key_path: String,
 }
