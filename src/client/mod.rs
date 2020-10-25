@@ -62,6 +62,7 @@ pub async fn start(remote_addr: &str, cert_path: &str, server_name: &str, list: 
       }
     });
   }
+
   let notify = Notify::new();
   notify.notified().await;
   Ok(())
@@ -72,7 +73,7 @@ async fn process(endpoint: &Endpoint, remote_addr: SocketAddr,
   let mut conn = endpoint.connect(&remote_addr, server_name)
     .res_convert(|_| "Connection error".to_string())?.await?;
 
-  info!("Connect {:?} success", proxy_addr);
+  info!("Connect {:?} success", remote_addr);
 
   let connection = conn.connection;
   let mut uni = connection.open_uni().await?;
@@ -87,6 +88,7 @@ async fn process(endpoint: &Endpoint, remote_addr: SocketAddr,
 
     loop {
       interval.tick().await;
+
       if let Err(e) = connection.send_datagram(HEART_BEAT) {
         error!("{}", e);
         return;
