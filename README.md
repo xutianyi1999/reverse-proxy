@@ -1,5 +1,5 @@
 # reverse-proxy
-内网反向代理
+内网穿透
 
 ## Config
 ### server
