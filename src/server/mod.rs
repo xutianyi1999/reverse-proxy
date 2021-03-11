@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
+use futures::StreamExt;
 use quinn::{Connecting, Connection, Endpoint};
 use tokio::io::{AsyncReadExt, Error, ErrorKind, Result};
 use tokio::net::TcpListener;
-use tokio::stream::StreamExt;
 use tokio::sync::Notify;
 
 use crate::commons::{InitConfig, OptionConvert, quic_config, StdResAutoConvert, StdResConvert};
@@ -61,8 +61,8 @@ async fn process(conn: Connecting) -> Result<()> {
     _ => return Err(Error::new(ErrorKind::Other, format!("{:?} config error", remote_addr)))
   }
 
-  let _ = rx.read_unordered().await;
-  notify.notify();
+  let _ = rx.read(&mut [0u8; 0]).await;
+  notify.notify_waiters();
   info!("{:?} disconnect", remote_addr);
   Ok(())
 }
@@ -70,7 +70,7 @@ async fn process(conn: Connecting) -> Result<()> {
 fn tcp_server_handler(bind_port: u16, notify: Arc<Notify>, quic_connection: Connection) {
   tokio::spawn(async move {
     let f1 = async move {
-      let mut listener = match TcpListener::bind(("0.0.0.0", bind_port)).await {
+      let listener = match TcpListener::bind(("0.0.0.0", bind_port)).await {
         Ok(listener) => listener,
         Err(e) => {
           error!("{}", e);
@@ -85,7 +85,7 @@ fn tcp_server_handler(bind_port: u16, notify: Arc<Notify>, quic_connection: Conn
           let (mut quic_tx, mut quic_rx) = match inner_connection.open_bi().await {
             Ok(socket) => socket,
             Err(e) => {
-              error!("{}", e);
+              error!("{:?}", e);
               return;
             }
           };

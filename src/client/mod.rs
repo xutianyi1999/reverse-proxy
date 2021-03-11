@@ -1,10 +1,10 @@
 use std::net::{SocketAddr, ToSocketAddrs};
 
 use bytes::Bytes;
+use futures::StreamExt;
 use quinn::Endpoint;
 use tokio::io::{AsyncWriteExt, Error, ErrorKind, Result};
 use tokio::net::TcpStream;
-use tokio::stream::StreamExt;
 use tokio::sync::Notify;
 use tokio::time;
 
@@ -90,7 +90,7 @@ async fn process(endpoint: &Endpoint, remote_addr: SocketAddr,
       interval.tick().await;
 
       if let Err(e) = connection.send_datagram(HEART_BEAT) {
-        error!("{}", e);
+        error!("{:?}", e);
         return;
       }
     }
