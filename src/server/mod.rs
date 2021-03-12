@@ -35,6 +35,8 @@ async fn process(conn: Connecting) -> Result<()> {
   let init_error_msg = format!("{:?} init error", remote_addr);
 
   let socket = conn.await.res_convert(|_| format!("{:?} connection error", remote_addr))?;
+  info!("{:?} connected", remote_addr);
+
   let mut uni = socket.uni_streams;
 
   let (init_config, mut rx) = match uni.next().await {
