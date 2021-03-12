@@ -1,10 +1,7 @@
-use std::sync::Arc;
-
 use futures::StreamExt;
 use quinn::{Connecting, Connection, Endpoint};
 use tokio::io::{AsyncReadExt, Error, ErrorKind, Result};
 use tokio::net::TcpListener;
-use tokio::sync::Notify;
 
 use crate::commons::{InitConfig, OptionConvert, quic_config, StdResAutoConvert, StdResConvert};
 use crate::commons;
@@ -55,63 +52,52 @@ async fn process(conn: Connecting) -> Result<()> {
     None => return Err(Error::new(ErrorKind::Other, init_error_msg))
   };
 
-  let notify = Arc::new(Notify::new());
-
-  match init_config.protocol {
-    commons::TCP => tcp_server_handler(init_config.bind_port, notify.clone(), socket.connection),
-    commons::UDP => {}
+  let f1 = match init_config.protocol {
+    commons::TCP => tcp_server_handler(init_config.bind_port, socket.connection),
     _ => return Err(Error::new(ErrorKind::Other, format!("{:?} config error", remote_addr)))
+  };
+
+  let f2 = rx.read(&mut [0u8; 0]);
+
+  tokio::select! {
+     _ = f1 => (),
+     _ = f2 => ()
   }
 
-  let _ = rx.read(&mut [0u8; 0]).await;
-  notify.notify_waiters();
   info!("{:?} disconnect", remote_addr);
   Ok(())
 }
 
-fn tcp_server_handler(bind_port: u16, notify: Arc<Notify>, quic_connection: Connection) {
-  tokio::spawn(async move {
-    let f1 = async move {
-      let listener = match TcpListener::bind(("0.0.0.0", bind_port)).await {
-        Ok(listener) => listener,
+async fn tcp_server_handler(bind_port: u16, quic_connection: Connection) {
+  let listener = match TcpListener::bind(("0.0.0.0", bind_port)).await {
+    Ok(listener) => listener,
+    Err(e) => {
+      error!("{}", e);
+      return;
+    }
+  };
+
+  while let Ok((mut socket, _)) = listener.accept().await {
+    let inner_connection = quic_connection.clone();
+
+    tokio::spawn(async move {
+      let (mut quic_tx, mut quic_rx) = match inner_connection.open_bi().await {
+        Ok(socket) => socket,
         Err(e) => {
-          error!("{}", e);
+          error!("{:?}", e);
           return;
         }
       };
 
-      while let Ok((mut socket, _)) = listener.accept().await {
-        let inner_connection = quic_connection.clone();
+      let (mut tcp_rx, mut tcp_tx) = socket.split();
 
-        tokio::spawn(async move {
-          let (mut quic_tx, mut quic_rx) = match inner_connection.open_bi().await {
-            Ok(socket) => socket,
-            Err(e) => {
-              error!("{:?}", e);
-              return;
-            }
-          };
+      let f1 = tokio::io::copy(&mut quic_rx, &mut tcp_tx);
+      let f2 = tokio::io::copy(&mut tcp_rx, &mut quic_tx);
 
-          let (mut tcp_rx, mut tcp_tx) = socket.split();
-
-          let f1 = tokio::io::copy(&mut quic_rx, &mut tcp_tx);
-          let f2 = tokio::io::copy(&mut tcp_rx, &mut quic_tx);
-
-          tokio::select! {
-             _ = f1 => (),
-             _ = f2 => ()
-          }
-        });
+      tokio::select! {
+         _ = f1 => (),
+         _ = f2 => ()
       }
-    };
-
-    let f2 = async move {
-      notify.notified().await
-    };
-
-    tokio::select! {
-      _ = f1 => (),
-      _ = f2 => ()
-    }
-  });
+    });
+  }
 }
