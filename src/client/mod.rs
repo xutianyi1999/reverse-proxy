@@ -6,7 +6,7 @@ use quinn::Endpoint;
 use tokio::io::{AsyncWriteExt, Error, ErrorKind, Result};
 use tokio::net::TcpStream;
 use tokio::sync::Notify;
-use tokio::time;
+use tokio::time::{Duration, sleep};
 
 use crate::commons::{InitConfig, OptionConvert, ProxyConfig, quic_config, StdResAutoConvert, StdResConvert};
 use crate::commons;
@@ -75,7 +75,7 @@ async fn process(endpoint: &Endpoint, remote_addr: SocketAddr,
 
   info!("Connect {:?} success", remote_addr);
 
-  let connection = conn.connection;
+  let connection = conn.connection.clone();
   let mut uni = connection.open_uni().await?;
   let init_config = serde_json::to_vec(&init_config)?;
   uni.write_u16(init_config.len() as u16).await?;
@@ -83,43 +83,46 @@ async fn process(endpoint: &Endpoint, remote_addr: SocketAddr,
 
   const HEART_BEAT: Bytes = Bytes::from_static(&[0u8; 1]);
 
-  tokio::spawn(async move {
-    let mut interval = time::interval(time::Duration::from_secs(3));
-
+  let f1 = async {
     loop {
-      interval.tick().await;
-
-      if let Err(e) = connection.send_datagram(HEART_BEAT) {
-        error!("{:?}", e);
-        return;
-      }
-    }
-  });
-
-  while let Some(res) = conn.bi_streams.next().await {
-    let (mut quic_tx, mut quic_rx) = match res {
-      Ok(v) => v,
-      Err(_) => return Err(Error::new(ErrorKind::Other, "Remote close"))
+      sleep(Duration::from_secs(3)).await;
+      connection.send_datagram(HEART_BEAT).res_convert(|_| "Send heart beat error".to_string())?;
     };
+  };
 
-    tokio::spawn(async move {
-      let mut local_socket = match TcpStream::connect(proxy_addr).await {
-        Ok(v) => v,
-        Err(e) => {
-          error!("{}", e);
-          return;
+  let f2 = async {
+    while let Some(res) = conn.bi_streams.next().await {
+      let (mut quic_tx, mut quic_rx) = res.res_convert(|| "Remote close".to_string())?;
+
+      tokio::spawn(async move {
+        let mut local_socket = match TcpStream::connect(proxy_addr).await {
+          Ok(v) => v,
+          Err(e) => {
+            error!("{}", e);
+            return;
+          }
+        };
+
+        let (mut local_rx, mut local_tx) = local_socket.split();
+
+        let f1 = tokio::io::copy(&mut local_rx, &mut quic_tx);
+        let f2 = tokio::io::copy(&mut quic_rx, &mut local_tx);
+
+        let res = tokio::select! {
+          res = f1 => res,
+          res = f2 => res
+        };
+
+        if let Err(e) = res {
+          error!("{:?}", e)
         }
-      };
-      let (mut local_rx, mut local_tx) = local_socket.split();
+      });
+    }
+    Ok(())
+  };
 
-      let f1 = tokio::io::copy(&mut local_rx, &mut quic_tx);
-      let f2 = tokio::io::copy(&mut quic_rx, &mut local_tx);
-
-      tokio::select! {
-        _ = f1 => (),
-        _ = f2 => ()
-      }
-    });
+  tokio::select! {
+    res = f1 => res,
+    res = f2 => res
   }
-  Ok(())
 }
