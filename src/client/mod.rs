@@ -3,7 +3,7 @@ use std::net::{SocketAddr, ToSocketAddrs};
 use bytes::Bytes;
 use futures::StreamExt;
 use quinn::Endpoint;
-use tokio::io::{AsyncWriteExt, Error, ErrorKind, Result};
+use tokio::io::{AsyncWriteExt, Result};
 use tokio::net::TcpStream;
 use tokio::sync::Notify;
 use tokio::time::{Duration, sleep};
@@ -92,7 +92,7 @@ async fn process(endpoint: &Endpoint, remote_addr: SocketAddr,
 
   let f2 = async {
     while let Some(res) = conn.bi_streams.next().await {
-      let (mut quic_tx, mut quic_rx) = res.res_convert(|| "Remote close".to_string())?;
+      let (mut quic_tx, mut quic_rx) = res.res_convert(|_| "Remote close".to_string())?;
 
       tokio::spawn(async move {
         let mut local_socket = match TcpStream::connect(proxy_addr).await {
