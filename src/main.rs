@@ -28,14 +28,14 @@ async fn main() -> Result<()> {
 
   match mode.as_str() {
     "client" => {
-      let client_config: ClientConfig = serde_json::from_slice(&config).res_auto_convert()?;
+      let client_config: ClientConfig = serde_json::from_slice(&config)?;
       client::start(&client_config.server_addr,
                     &client_config.cert_path,
                     &client_config.server_name,
                     client_config.proxy).await
     }
     "server" => {
-      let server_config: ServerConfig = serde_json::from_slice(&config).res_auto_convert()?;
+      let server_config: ServerConfig = serde_json::from_slice(&config)?;
       server::start(&server_config.bind_addr, &server_config.cert_path, &server_config.priv_key_path).await
     }
     _ => return Err(Error::new(ErrorKind::Other, "CMD error"))

@@ -92,7 +92,7 @@ async fn process(endpoint: &Endpoint, remote_addr: SocketAddr,
 
   let f2 = async {
     while let Some(res) = conn.bi_streams.next().await {
-      let (mut quic_tx, mut quic_rx) = res.res_convert(|_| "Remote close".to_string())?;
+      let (mut quic_tx, mut quic_rx) = res?;
 
       tokio::spawn(async move {
         let mut local_socket = match TcpStream::connect(proxy_addr).await {

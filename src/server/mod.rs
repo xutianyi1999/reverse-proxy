@@ -3,11 +3,11 @@ use quinn::{Connecting, Connection, Endpoint};
 use tokio::io::{AsyncReadExt, Error, ErrorKind, Result};
 use tokio::net::TcpListener;
 
-use crate::commons::{InitConfig, OptionConvert, quic_config, StdResAutoConvert, StdResConvert};
+use crate::commons::{InitConfig, OptionConvert, quic_config, StdResConvert};
 use crate::commons;
 
 pub async fn start(addr: &str, cert_path: &str, priv_key_path: &str) -> Result<()> {
-  let sever_config = quic_config::configure_server(cert_path, priv_key_path).await.res_auto_convert()?;
+  let sever_config = quic_config::configure_server(cert_path, priv_key_path).await?;
   let mut build = Endpoint::builder();
   build.listen(sever_config);
 
@@ -31,7 +31,7 @@ async fn process(conn: Connecting) -> Result<()> {
   let remote_addr = conn.remote_address();
   let init_error_msg = format!("{:?} init error", remote_addr);
 
-  let socket = conn.await.res_convert(|_| format!("{:?} connection error", remote_addr))?;
+  let socket = conn.await?;
   info!("{:?} connected", remote_addr);
 
   let mut uni = socket.uni_streams;
@@ -42,8 +42,8 @@ async fn process(conn: Connecting) -> Result<()> {
         Ok(mut recv_stream) => {
           let len = recv_stream.read_u16().await?;
           let mut buff = vec![0u8; len as usize];
-          let _ = recv_stream.read_exact(&mut buff).await.res_convert(|_| init_error_msg.clone());
-          let init_config: InitConfig = serde_json::from_slice(&buff).res_auto_convert()?;
+          recv_stream.read_exact(&mut buff).await.res_convert(|_| init_error_msg.clone())?;
+          let init_config: InitConfig = serde_json::from_slice(&buff)?;
           (init_config, recv_stream)
         }
         Err(_) => return Err(Error::new(ErrorKind::Other, init_error_msg))
@@ -59,23 +59,20 @@ async fn process(conn: Connecting) -> Result<()> {
 
   let f2 = rx.read(&mut [0u8; 0]);
 
-  tokio::select! {
-     _ = f1 => (),
-     _ = f2 => ()
-  }
+  let res = tokio::select! {
+     res = f1 => res,
+     res = f2 => {
+        res?;
+        Ok(())
+     }
+  };
 
   info!("{:?} disconnect", remote_addr);
-  Ok(())
+  res
 }
 
-async fn tcp_server_handler(bind_port: u16, quic_connection: Connection) {
-  let listener = match TcpListener::bind(("0.0.0.0", bind_port)).await {
-    Ok(listener) => listener,
-    Err(e) => {
-      error!("{}", e);
-      return;
-    }
-  };
+async fn tcp_server_handler(bind_port: u16, quic_connection: Connection) -> Result<()> {
+  let listener = TcpListener::bind(("0.0.0.0", bind_port)).await?;
 
   while let Ok((mut socket, _)) = listener.accept().await {
     let inner_connection = quic_connection.clone();
@@ -94,10 +91,15 @@ async fn tcp_server_handler(bind_port: u16, quic_connection: Connection) {
       let f1 = tokio::io::copy(&mut quic_rx, &mut tcp_tx);
       let f2 = tokio::io::copy(&mut tcp_rx, &mut quic_tx);
 
-      tokio::select! {
-         _ = f1 => (),
-         _ = f2 => ()
+      let res = tokio::select! {
+          res = f1 => res,
+          res = f2 => res
+      };
+
+      if let Err(e) = res {
+        error!("{:?}", e)
       }
     });
-  }
+  };
+  Ok(())
 }
