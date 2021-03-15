@@ -70,12 +70,14 @@ pub async fn start(remote_addr: &str, cert_path: &str, server_name: &str, list: 
 
 async fn process(endpoint: &Endpoint, remote_addr: SocketAddr,
                  proxy_addr: SocketAddr, server_name: &str, init_config: InitConfig) -> Result<()> {
-  let mut conn = endpoint.connect(&remote_addr, server_name)
+  let conn = endpoint.connect(&remote_addr, server_name)
     .res_convert(|_| "Connection error".to_string())?.await?;
 
   info!("Connect {:?} success", remote_addr);
 
-  let connection = conn.connection.clone();
+  let connection = conn.connection;
+  let mut bi_streams = conn.bi_streams;
+
   let mut uni = connection.open_uni().await?;
   let init_config = serde_json::to_vec(&init_config)?;
   uni.write_u16(init_config.len() as u16).await?;
@@ -83,7 +85,7 @@ async fn process(endpoint: &Endpoint, remote_addr: SocketAddr,
 
   const HEART_BEAT: Bytes = Bytes::from_static(&[0u8; 1]);
 
-  let f1 = async {
+  let f1 = async move {
     loop {
       sleep(Duration::from_secs(3)).await;
       connection.send_datagram(HEART_BEAT).res_convert(|_| "Send heart beat error".to_string())?;
@@ -91,7 +93,7 @@ async fn process(endpoint: &Endpoint, remote_addr: SocketAddr,
   };
 
   let f2 = async {
-    while let Some(res) = conn.bi_streams.next().await {
+    while let Some(res) = bi_streams.next().await {
       let (mut quic_tx, mut quic_rx) = res?;
 
       tokio::spawn(async move {
