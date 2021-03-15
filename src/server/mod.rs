@@ -57,7 +57,8 @@ async fn process(conn: Connecting) -> Result<()> {
     _ => return Err(Error::new(ErrorKind::Other, format!("{:?} config error", remote_addr)))
   };
 
-  let f2 = rx.read(&mut [0u8; 1]);
+  let mut t = [0u8; 1];
+  let f2 = rx.read(&mut t);
 
   let res = tokio::select! {
      res = f1 => res,
