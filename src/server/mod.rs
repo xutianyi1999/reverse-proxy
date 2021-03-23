@@ -1,9 +1,12 @@
-use futures::StreamExt;
-use quinn::{Connecting, Connection, Endpoint};
-use tokio::io::{AsyncReadExt, Error, ErrorKind, Result};
-use tokio::net::TcpListener;
+use std::net::SocketAddr;
 
-use crate::commons::{InitConfig, OptionConvert, quic_config, StdResConvert};
+use bytes::{Buf, BufMut, BytesMut};
+use futures::StreamExt;
+use quinn::{Connecting, Connection, Datagrams, Endpoint};
+use tokio::io::{AsyncReadExt, Error, ErrorKind, Result};
+use tokio::net::{TcpListener, UdpSocket};
+
+use crate::commons::{InitConfig, IPV4, IPV6, OptionConvert, quic_config, StdResConvert};
 use crate::commons;
 
 pub async fn start(addr: &str, cert_path: &str, priv_key_path: &str) -> Result<()> {
@@ -57,6 +60,7 @@ async fn process(conn: Connecting) -> Result<()> {
     _ => return Err(Error::new(ErrorKind::Other, format!("{:?} config error", remote_addr)))
   };
 
+  // TODO 修改为uni.next()
   let mut t = [0u8; 1];
   let f2 = rx.read(&mut t);
 
@@ -70,6 +74,65 @@ async fn process(conn: Connecting) -> Result<()> {
 
   info!("{:?} disconnect", remote_addr);
   res
+}
+
+async fn udp_server_handler(bind_port: u16, quic_connection: Connection, mut datagram: Datagrams) -> Result<()> {
+  let f = async {
+    let socket = UdpSocket::bind(("0.0.0.0", bind_port)).await?;
+    let mut buff = [0u8; 1420];
+
+    loop {
+      if let Ok((len, dest_addr)) = socket.recv_from(&mut buff).await {
+        let data_slice = &buff[..len];
+
+        let data = match dest_addr {
+          SocketAddr::V4(addr) => {
+            let mut out = BytesMut::with_capacity(1 + 4 + 2 + len);
+
+            let ip = addr.ip().octets();
+            let port = addr.port();
+
+            out.put_u8(IPV4);
+            out.put_slice(&ip);
+            out.put_u16(port);
+            out.put_slice(data_slice);
+
+            out.freeze()
+          }
+          SocketAddr::V6(addr) => {
+            let mut out = BytesMut::with_capacity(1 + 16 + 2 + len);
+
+            let ip = addr.ip().octets();
+            let port = addr.port();
+
+            out.put_u8(IPV6);
+            out.put_slice(&ip);
+            out.put_u16(port);
+            out.put_slice(data_slice);
+
+            out.freeze()
+          }
+        };
+
+        quic_connection.send_datagram(data).res_convert(|_| "Send udp packet error".to_string())?;
+      };
+    }
+    Result::Ok(())
+  };
+
+  async {
+    while let Some(res) = datagram.next().await {
+      let mut packet = res?;
+
+      match packet.get_u8() {
+        IPV6 => {}
+        IPV4 => {}
+        _ => return Err(Error::new(ErrorKind::Other, "Msg error"))
+      }
+    }
+    Result::Ok(())
+  };
+  Ok(())
 }
 
 async fn tcp_server_handler(bind_port: u16, quic_connection: Connection) -> Result<()> {

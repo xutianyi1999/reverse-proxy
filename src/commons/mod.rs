@@ -53,6 +53,9 @@ fn std_res_convert<T, E>(res: std::result::Result<T, E>, f: impl Fn(E) -> String
 pub const TCP: u8 = 1;
 pub const UDP: u8 = 2;
 
+pub const IPV4: u8 = 1;
+pub const IPV6: u8 = 2;
+
 #[derive(Serialize, Deserialize)]
 #[derive(Copy, Clone)]
 pub struct InitConfig {
