@@ -2,7 +2,7 @@ use std::net::{SocketAddr, ToSocketAddrs};
 
 use bytes::Bytes;
 use futures::StreamExt;
-use quinn::Endpoint;
+use quinn::{Connection, Datagrams, Endpoint, IncomingBiStreams};
 use tokio::io::{AsyncWriteExt, Result};
 use tokio::net::TcpStream;
 use tokio::sync::Notify;
@@ -10,6 +10,8 @@ use tokio::time::{Duration, sleep};
 
 use crate::commons::{InitConfig, OptionConvert, ProxyConfig, quic_config, StdResAutoConvert, StdResConvert};
 use crate::commons;
+
+mod nat;
 
 pub async fn start(remote_addr: &str, cert_path: &str, server_name: &str, list: Vec<ProxyConfig>) -> Result<()> {
   let client_config = quic_config::configure_client(cert_path).await?;
@@ -82,7 +84,15 @@ async fn process(endpoint: &Endpoint, remote_addr: SocketAddr,
   let init_config = serde_json::to_vec(&init_config)?;
   uni.write_u16(init_config.len() as u16).await?;
   uni.write_all(&init_config).await?;
+  Ok(())
+}
 
+async fn udp_handler(connection: Connection, datagrams: Datagrams, proxy_addr: SocketAddr) -> Result<()> {
+  // let a = connection.send_datagram()
+  Ok(())
+}
+
+async fn tcp_handler(connection: Connection, mut bi_streams: IncomingBiStreams, proxy_addr: SocketAddr) -> Result<()> {
   const HEART_BEAT: Bytes = Bytes::from_static(&[0u8; 1]);
 
   let f1 = async move {

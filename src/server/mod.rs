@@ -1,4 +1,6 @@
-use std::net::SocketAddr;
+use std::borrow::Borrow;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::ops::Deref;
 
 use bytes::{Buf, BufMut, BytesMut};
 use futures::StreamExt;
@@ -39,7 +41,7 @@ async fn process(conn: Connecting) -> Result<()> {
 
   let mut uni = socket.uni_streams;
 
-  let (init_config, mut rx) = match uni.next().await {
+  let (init_config) = match uni.next().await {
     Some(res) => {
       match res {
         Ok(mut recv_stream) => {
@@ -47,7 +49,7 @@ async fn process(conn: Connecting) -> Result<()> {
           let mut buff = vec![0u8; len as usize];
           recv_stream.read_exact(&mut buff).await.res_convert(|_| init_error_msg.clone())?;
           let init_config: InitConfig = serde_json::from_slice(&buff)?;
-          (init_config, recv_stream)
+          init_config
         }
         Err(_) => return Err(Error::new(ErrorKind::Other, init_error_msg))
       }
@@ -60,16 +62,19 @@ async fn process(conn: Connecting) -> Result<()> {
     _ => return Err(Error::new(ErrorKind::Other, format!("{:?} config error", remote_addr)))
   };
 
-  // TODO 修改为uni.next()
-  let mut t = [0u8; 1];
-  let f2 = rx.read(&mut t);
+  let f2 = async move {
+    match uni.next().await {
+      Some(res) => {
+        res?;
+        Ok(())
+      }
+      None => Ok(())
+    }
+  };
 
   let res = tokio::select! {
      res = f1 => res,
-     res = f2 => {
-        res?;
-        Ok(())
-     }
+     res = f2 => res
   };
 
   info!("{:?} disconnect", remote_addr);
@@ -77,8 +82,9 @@ async fn process(conn: Connecting) -> Result<()> {
 }
 
 async fn udp_server_handler(bind_port: u16, quic_connection: Connection, mut datagram: Datagrams) -> Result<()> {
+  let socket = UdpSocket::bind(("0.0.0.0", bind_port)).await?;
+
   let f = async {
-    let socket = UdpSocket::bind(("0.0.0.0", bind_port)).await?;
     let mut buff = [0u8; 1420];
 
     loop {
@@ -124,11 +130,27 @@ async fn udp_server_handler(bind_port: u16, quic_connection: Connection, mut dat
     while let Some(res) = datagram.next().await {
       let mut packet = res?;
 
-      match packet.get_u8() {
-        IPV6 => {}
-        IPV4 => {}
+      let dest = match packet.get_u8() {
+        IPV4 => {
+          let mut ip = [0u8; 4];
+          packet.copy_to_slice(&mut ip);
+          let ip = IpAddr::from(ip);
+
+          let port = packet.get_u16();
+          SocketAddr::new(ip, port)
+        }
+        IPV6 => {
+          let mut ip = [0u8; 16];
+          packet.copy_to_slice(&mut ip);
+          let ip = IpAddr::from(ip);
+
+          let port = packet.get_u16();
+          SocketAddr::new(ip, port)
+        }
         _ => return Err(Error::new(ErrorKind::Other, "Msg error"))
-      }
+      };
+
+      socket.send_to(&packet, dest).await?;
     }
     Result::Ok(())
   };
