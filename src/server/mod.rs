@@ -8,7 +8,7 @@ use quinn::{Connecting, Connection, Datagrams, Endpoint};
 use tokio::io::{AsyncReadExt, Error, ErrorKind, Result};
 use tokio::net::{TcpListener, UdpSocket};
 
-use crate::commons::{InitConfig, IPV4, IPV6, OptionConvert, quic_config, StdResConvert};
+use crate::commons::{decode_msg, encode_msg, InitConfig, IPV4, IPV6, OptionConvert, quic_config, StdResConvert};
 use crate::commons;
 
 pub async fn start(addr: &str, cert_path: &str, priv_key_path: &str) -> Result<()> {
@@ -90,36 +90,7 @@ async fn udp_server_handler(bind_port: u16, quic_connection: Connection, mut dat
     loop {
       if let Ok((len, dest_addr)) = socket.recv_from(&mut buff).await {
         let data_slice = &buff[..len];
-
-        let data = match dest_addr {
-          SocketAddr::V4(addr) => {
-            let mut out = BytesMut::with_capacity(1 + 4 + 2 + len);
-
-            let ip = addr.ip().octets();
-            let port = addr.port();
-
-            out.put_u8(IPV4);
-            out.put_slice(&ip);
-            out.put_u16(port);
-            out.put_slice(data_slice);
-
-            out.freeze()
-          }
-          SocketAddr::V6(addr) => {
-            let mut out = BytesMut::with_capacity(1 + 16 + 2 + len);
-
-            let ip = addr.ip().octets();
-            let port = addr.port();
-
-            out.put_u8(IPV6);
-            out.put_slice(&ip);
-            out.put_u16(port);
-            out.put_slice(data_slice);
-
-            out.freeze()
-          }
-        };
-
+        let data = encode_msg(data_slice, dest_addr);
         quic_connection.send_datagram(data).res_convert(|_| "Send udp packet error".to_string())?;
       };
     }
@@ -129,28 +100,8 @@ async fn udp_server_handler(bind_port: u16, quic_connection: Connection, mut dat
   async {
     while let Some(res) = datagram.next().await {
       let mut packet = res?;
-
-      let dest = match packet.get_u8() {
-        IPV4 => {
-          let mut ip = [0u8; 4];
-          packet.copy_to_slice(&mut ip);
-          let ip = IpAddr::from(ip);
-
-          let port = packet.get_u16();
-          SocketAddr::new(ip, port)
-        }
-        IPV6 => {
-          let mut ip = [0u8; 16];
-          packet.copy_to_slice(&mut ip);
-          let ip = IpAddr::from(ip);
-
-          let port = packet.get_u16();
-          SocketAddr::new(ip, port)
-        }
-        _ => return Err(Error::new(ErrorKind::Other, "Msg error"))
-      };
-
-      socket.send_to(&packet, dest).await?;
+      let (data, dest) = decode_msg(packet)?;
+      socket.send_to(&data, dest).await?;
     }
     Result::Ok(())
   };

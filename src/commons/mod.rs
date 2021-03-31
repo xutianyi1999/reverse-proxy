@@ -1,3 +1,6 @@
+use std::net::{IpAddr, SocketAddr};
+
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use serde::{Deserialize, Serialize};
 use tokio::io::{Error, ErrorKind, Result};
 
@@ -50,12 +53,6 @@ fn std_res_convert<T, E>(res: std::result::Result<T, E>, f: impl Fn(E) -> String
   }
 }
 
-pub const TCP: u8 = 1;
-pub const UDP: u8 = 2;
-
-pub const IPV4: u8 = 1;
-pub const IPV6: u8 = 2;
-
 #[derive(Serialize, Deserialize)]
 #[derive(Copy, Clone)]
 pub struct InitConfig {
@@ -86,4 +83,66 @@ pub struct ServerConfig {
   pub bind_addr: String,
   pub cert_path: String,
   pub priv_key_path: String,
+}
+
+pub const TCP: u8 = 1;
+pub const UDP: u8 = 2;
+
+pub const IPV4: u8 = 1;
+pub const IPV6: u8 = 2;
+
+pub fn decode_msg(mut packet: Bytes) -> Result<(Bytes, SocketAddr)> {
+  let dest = match packet.get_u8() {
+    IPV4 => {
+      let mut ip = [0u8; 4];
+      packet.copy_to_slice(&mut ip);
+      let ip = IpAddr::from(ip);
+
+      let port = packet.get_u16();
+      SocketAddr::new(ip, port)
+    }
+    IPV6 => {
+      let mut ip = [0u8; 16];
+      packet.copy_to_slice(&mut ip);
+      let ip = IpAddr::from(ip);
+
+      let port = packet.get_u16();
+      SocketAddr::new(ip, port)
+    }
+    _ => return Err(Error::new(ErrorKind::Other, "Msg error"))
+  };
+  Ok((packet, dest))
+}
+
+pub fn encode_msg(data_slice: &[u8], dest: SocketAddr) -> Bytes {
+  let len = data_slice.len();
+
+  match dest {
+    SocketAddr::V4(addr) => {
+      let mut out = BytesMut::with_capacity(1 + 4 + 2 + len);
+
+      let ip = addr.ip().octets();
+      let port = addr.port();
+
+      out.put_u8(IPV4);
+      out.put_slice(&ip);
+      out.put_u16(port);
+      out.put_slice(data_slice);
+
+      out.freeze()
+    }
+    SocketAddr::V6(addr) => {
+      let mut out = BytesMut::with_capacity(1 + 16 + 2 + len);
+
+      let ip = addr.ip().octets();
+      let port = addr.port();
+
+      out.put_u8(IPV6);
+      out.put_slice(&ip);
+      out.put_u16(port);
+      out.put_slice(data_slice);
+
+      out.freeze()
+    }
+  }
 }
