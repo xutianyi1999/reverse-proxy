@@ -8,21 +8,59 @@ use parking_lot::RwLock;
 use quinn::Connection;
 use tokio::io::AsyncWriteExt;
 use tokio::io::Result;
-use tokio::net::{TcpStream, UdpSocket};
+use tokio::net::{TcpSocket, TcpStream, UdpSocket};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::{Duration, sleep};
 
-use crate::commons::{encode_msg, StdResConvert};
+use crate::commons::{encode_msg, StdResAutoConvert, StdResConvert};
 
-type Mapping = Arc<RwLock<HashMap<SocketAddr, Sender<Vec<u8>>>>>;
+type Mapping = Arc<RwLock<HashMap<SocketAddr, ProxySocket>>>;
 
 pub struct NatMapping {
+  local_addr: SocketAddr,
   map: Mapping,
   timeout: Duration,
+  connection: Connection,
 }
 
 struct ProxySocket {
   tx: Sender<Vec<u8>>,
+}
+
+impl NatMapping {
+  fn new(local_addr: SocketAddr, timeout: Duration, connection: Connection) -> Self {
+    NatMapping {
+      local_addr,
+      map: Arc::new(RwLock::new(HashMap::new())),
+      timeout,
+      connection,
+    }
+  }
+
+  fn send(&self, remote_addr: SocketAddr, data: Vec<u8>) -> Result<()> {
+    let guard = self.map.read();
+
+    match guard.get(&remote_addr) {
+      Some(tx) => {
+        tx.send(data)
+      }
+      None => {
+        drop(guard);
+
+        let sock = ProxySocket::new(
+          self.local_addr,
+          remote_addr,
+          self.connection.clone(),
+          self.map.clone(),
+          self.timeout,
+        );
+
+        let res = sock.send(data);
+        self.map.write().insert(remote_addr, sock);
+        res
+      }
+    }
+  }
 }
 
 impl ProxySocket {
@@ -70,6 +108,7 @@ impl ProxySocket {
           tokio::time::sleep(timeout).await;
 
           if latest_time.read().elapsed() >= timeout {
+            map.write().remove(&remote_addr);
             return Result::Ok(());
           }
         }
@@ -87,5 +126,9 @@ impl ProxySocket {
     });
 
     proxy_socket
+  }
+
+  fn send(&self, data: Vec<u8>) -> Result<()> {
+    self.tx.try_send(data).res_auto_convert()
   }
 }
