@@ -1,13 +1,11 @@
-use std::net::{SocketAddr, ToSocketAddrs};
+use std::net::SocketAddr;
 
-use bytes::Bytes;
-use futures::future::err;
 use futures::StreamExt;
 use quinn::{Connection, Datagrams, Endpoint, IncomingBiStreams};
 use tokio::io::{AsyncWriteExt, Error, ErrorKind, Result};
 use tokio::net::TcpStream;
 use tokio::sync::Notify;
-use tokio::time::{Duration, sleep};
+use tokio::time::Duration;
 
 use crate::client::nat::NatMapping;
 use crate::commons::{decode_msg, HEARTBEAT, InitConfig, OptionConvert, ProxyConfig, quic_config, StdResAutoConvert, StdResConvert};
@@ -36,7 +34,7 @@ pub async fn start(server_addr: &str, cert_path: &str, server_name: &str, list: 
         let protocol = match proxy_config.protocol.as_str() {
           "tcp" => commons::TCP,
           "udp" => commons::UDP,
-          _ => return Err(Error::new(ErrorKind::Other, "Proxy config error"))
+          _ => return Result::<()>::Err(Error::new(ErrorKind::Other, "Proxy config error"))
         };
 
         let init_config = InitConfig { protocol, bind_port: proxy_config.remote_port };
@@ -47,7 +45,6 @@ pub async fn start(server_addr: &str, cert_path: &str, server_name: &str, list: 
             error!("{}", e);
           }
         }
-        Ok(())
       };
 
       if let Err(e) = res.await {
@@ -68,8 +65,8 @@ async fn process(endpoint: &Endpoint, server_addr: SocketAddr,
   info!("Connect {:?} success", server_addr);
 
   let connection = conn.connection;
-  let mut bi_streams = conn.bi_streams;
-  let mut datagrams = conn.datagrams;
+  let bi_streams = conn.bi_streams;
+  let datagrams = conn.datagrams;
 
   let mut uni = connection.open_uni().await?;
   let init_config_data = serde_json::to_vec(&init_config)?;
@@ -79,7 +76,7 @@ async fn process(endpoint: &Endpoint, server_addr: SocketAddr,
   let f1 = async move {
     match init_config.protocol {
       commons::UDP => udp_handler(connection, datagrams, proxy_addr).await,
-      commons::TCP => tcp_handler(connection, bi_streams, proxy_addr).await,
+      commons::TCP => tcp_handler(bi_streams, proxy_addr).await,
       _ => return Err(Error::new(ErrorKind::Other, format!("{:?} config error", server_addr)))
     }
   };
@@ -117,7 +114,7 @@ async fn udp_handler(connection: Connection, mut datagrams: Datagrams, proxy_add
   Ok(())
 }
 
-async fn tcp_handler(connection: Connection, mut bi_streams: IncomingBiStreams, proxy_addr: SocketAddr) -> Result<()> {
+async fn tcp_handler(mut bi_streams: IncomingBiStreams, proxy_addr: SocketAddr) -> Result<()> {
   while let Some(res) = bi_streams.next().await {
     let (mut quic_tx, mut quic_rx) = res?;
 

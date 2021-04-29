@@ -1,14 +1,9 @@
-use std::borrow::Borrow;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::ops::Deref;
-
-use bytes::{Buf, BufMut, BytesMut};
 use futures::StreamExt;
 use quinn::{Connecting, Connection, Datagrams, Endpoint};
 use tokio::io::{AsyncReadExt, Error, ErrorKind, Result};
 use tokio::net::{TcpListener, UdpSocket};
 
-use crate::commons::{decode_msg, encode_msg, HEARTBEAT, InitConfig, IPV4, IPV6, OptionConvert, quic_config, StdResAutoConvert, StdResConvert};
+use crate::commons::{decode_msg, encode_msg, HEARTBEAT, InitConfig, OptionConvert, quic_config, StdResAutoConvert, StdResConvert};
 use crate::commons;
 
 pub async fn start(addr: &str, cert_path: &str, priv_key_path: &str) -> Result<()> {
@@ -40,7 +35,7 @@ async fn process(conn: Connecting) -> Result<()> {
 
   let mut uni = socket.uni_streams;
   let connection = socket.connection;
-  let mut datagrams = socket.datagrams;
+  let datagrams = socket.datagrams;
 
   let mut recv = uni.next().await.option_to_res(&init_error_msg)??;
 
@@ -91,7 +86,7 @@ async fn udp_server_handler(bind_port: u16, quic_connection: Connection, mut dat
 
   let f2 = async {
     while let Some(res) = datagram.next().await {
-      let mut packet = res?;
+      let packet = res?;
       let (data, dest) = decode_msg(packet)?;
       socket.send_to(&data, dest).await?;
     }
