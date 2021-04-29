@@ -3,13 +3,13 @@ use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Weak};
 use std::time::{Instant, SystemTime};
 
-use bytes::{BufMut, Bytes};
-use parking_lot::RwLock;
+use bytes::{Buf, BufMut, Bytes};
 use quinn::Connection;
 use tokio::io::AsyncWriteExt;
 use tokio::io::Result;
 use tokio::net::{TcpSocket, TcpStream, UdpSocket};
 use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::sync::RwLock;
 use tokio::time::{Duration, sleep};
 
 use crate::commons::{encode_msg, StdResAutoConvert, StdResConvert};
@@ -28,7 +28,7 @@ struct ProxySocket {
 }
 
 impl NatMapping {
-  fn new(local_addr: SocketAddr, timeout: Duration, connection: Connection) -> Self {
+  pub fn new(local_addr: SocketAddr, timeout: Duration, connection: Connection) -> Self {
     NatMapping {
       local_addr,
       map: Arc::new(RwLock::new(HashMap::new())),
@@ -37,12 +37,12 @@ impl NatMapping {
     }
   }
 
-  fn send(&self, remote_addr: SocketAddr, data: Vec<u8>) -> Result<()> {
-    let guard = self.map.read();
+  pub async fn send(&self, remote_addr: SocketAddr, data: Vec<u8>) -> Result<()> {
+    let guard = self.map.read().await;
 
     match guard.get(&remote_addr) {
       Some(tx) => {
-        tx.send(data)
+        tx.send(data).await
       }
       None => {
         drop(guard);
@@ -55,16 +55,27 @@ impl NatMapping {
           self.timeout,
         );
 
-        let res = sock.send(data);
-        self.map.write().insert(remote_addr, sock);
+        let res = sock.send(data).await;
+
+        if let Ok(_) = res {
+          self.map.write().await.insert(remote_addr, sock);
+        }
         res
       }
     }
   }
+
+  pub async fn drop(&self) -> () {
+    self.map.write().await.clear();
+  }
 }
 
 impl ProxySocket {
-  fn new(local_addr: SocketAddr, remote_addr: SocketAddr, connection: Connection, map: Mapping, timeout: Duration) -> Self {
+  fn new(local_addr: SocketAddr,
+         remote_addr: SocketAddr,
+         connection: Connection,
+         map: Arc<RwLock<HashMap<SocketAddr, ProxySocket>>>,
+         timeout: Duration) -> Self {
     let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(50);
     let proxy_socket = ProxySocket { tx };
 
@@ -82,7 +93,7 @@ impl ProxySocket {
         return;
       }
 
-      let latest_time = RwLock::new(Instant::now());
+      let latest_time = parking_lot::RwLock::new(Instant::now());
 
       let f1 = async {
         while let Some(packet) = rx.recv().await {
@@ -93,7 +104,7 @@ impl ProxySocket {
       };
 
       let f2 = async {
-        let mut buff = [0u8; 1500];
+        let mut buff = [0u8; 65535];
 
         while let Ok(len) = sock.recv(&mut buff).await {
           *latest_time.write() = Instant::now();
@@ -108,7 +119,7 @@ impl ProxySocket {
           tokio::time::sleep(timeout).await;
 
           if latest_time.read().elapsed() >= timeout {
-            map.write().remove(&remote_addr);
+            map.write().await.remove(&remote_addr);
             return Result::Ok(());
           }
         }
@@ -128,7 +139,7 @@ impl ProxySocket {
     proxy_socket
   }
 
-  fn send(&self, data: Vec<u8>) -> Result<()> {
-    self.tx.try_send(data).res_auto_convert()
+  async fn send(&self, data: Vec<u8>) -> Result<()> {
+    self.tx.send(data).await.res_auto_convert()
   }
 }

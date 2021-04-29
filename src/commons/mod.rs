@@ -85,6 +85,7 @@ pub struct ServerConfig {
   pub priv_key_path: String,
 }
 
+pub const HEARTBEAT: u8 = 1;
 pub const TCP: u8 = 1;
 pub const UDP: u8 = 2;
 

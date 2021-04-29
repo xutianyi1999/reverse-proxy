@@ -8,7 +8,7 @@ use quinn::{Connecting, Connection, Datagrams, Endpoint};
 use tokio::io::{AsyncReadExt, Error, ErrorKind, Result};
 use tokio::net::{TcpListener, UdpSocket};
 
-use crate::commons::{decode_msg, encode_msg, InitConfig, IPV4, IPV6, OptionConvert, quic_config, StdResConvert};
+use crate::commons::{decode_msg, encode_msg, HEARTBEAT, InitConfig, IPV4, IPV6, OptionConvert, quic_config, StdResAutoConvert, StdResConvert};
 use crate::commons;
 
 pub async fn start(addr: &str, cert_path: &str, priv_key_path: &str) -> Result<()> {
@@ -16,11 +16,10 @@ pub async fn start(addr: &str, cert_path: &str, priv_key_path: &str) -> Result<(
   let mut build = Endpoint::builder();
   build.listen(sever_config);
 
-  let bind_addr = tokio::net::lookup_host(addr).await?.next().option_to_res("Bind address error")?;
-  let (_, mut incoming) = build.bind(&bind_addr)
+  let (_, mut incoming) = build.bind(&addr.parse().res_auto_convert()?)
     .res_convert(|_| "Quic server bind error".to_string())?;
 
-  info!("Bind {:?}", bind_addr);
+  info!("Bind {}", addr);
 
   while let Some(conn) = incoming.next().await {
     tokio::spawn(async move {
@@ -40,36 +39,31 @@ async fn process(conn: Connecting) -> Result<()> {
   info!("{:?} connected", remote_addr);
 
   let mut uni = socket.uni_streams;
+  let connection = socket.connection;
+  let mut datagrams = socket.datagrams;
 
-  let (init_config) = match uni.next().await {
-    Some(res) => {
-      match res {
-        Ok(mut recv_stream) => {
-          let len = recv_stream.read_u16().await?;
-          let mut buff = vec![0u8; len as usize];
-          recv_stream.read_exact(&mut buff).await.res_convert(|_| init_error_msg.clone())?;
-          let init_config: InitConfig = serde_json::from_slice(&buff)?;
-          init_config
-        }
-        Err(_) => return Err(Error::new(ErrorKind::Other, init_error_msg))
-      }
+  let mut recv = uni.next().await.option_to_res(&init_error_msg)??;
+
+  let len = recv.read_u16().await?;
+  let mut buff = vec![0u8; len as usize];
+  recv.read_exact(&mut buff).await.res_convert(|_| init_error_msg.clone())?;
+  let init_config: InitConfig = serde_json::from_slice(&buff)?;
+
+  let f1 = async move {
+    match init_config.protocol {
+      commons::UDP => udp_server_handler(init_config.bind_port, connection, datagrams).await,
+      commons::TCP => tcp_server_handler(init_config.bind_port, connection).await,
+      _ => return Err(Error::new(ErrorKind::Other, format!("{:?} config error", remote_addr)))
     }
-    None => return Err(Error::new(ErrorKind::Other, init_error_msg))
-  };
-
-  let f1 = match init_config.protocol {
-    commons::TCP => tcp_server_handler(init_config.bind_port, socket.connection),
-    _ => return Err(Error::new(ErrorKind::Other, format!("{:?} config error", remote_addr)))
   };
 
   let f2 = async move {
-    match uni.next().await {
-      Some(res) => {
-        res?;
-        Ok(())
+    while let Ok(packet) = recv.read_u8().await {
+      if packet != HEARTBEAT {
+        break;
       }
-      None => Ok(())
     }
+    Ok(())
   };
 
   let res = tokio::select! {
@@ -84,28 +78,30 @@ async fn process(conn: Connecting) -> Result<()> {
 async fn udp_server_handler(bind_port: u16, quic_connection: Connection, mut datagram: Datagrams) -> Result<()> {
   let socket = UdpSocket::bind(("0.0.0.0", bind_port)).await?;
 
-  let f = async {
-    let mut buff = [0u8; 1420];
+  let f1 = async {
+    let mut buff = [0u8; 65536];
 
-    loop {
-      if let Ok((len, dest_addr)) = socket.recv_from(&mut buff).await {
-        let data_slice = &buff[..len];
-        let data = encode_msg(data_slice, dest_addr);
-        quic_connection.send_datagram(data).res_convert(|_| "Send udp packet error".to_string())?;
-      };
-    }
-    Result::Ok(())
+    while let Ok((len, dest_addr)) = socket.recv_from(&mut buff).await {
+      let data_slice = &buff[..len];
+      let data = encode_msg(data_slice, dest_addr);
+      quic_connection.send_datagram(data).res_convert(|_| "Send udp packet error".to_string())?;
+    };
+    Ok(())
   };
 
-  async {
+  let f2 = async {
     while let Some(res) = datagram.next().await {
       let mut packet = res?;
       let (data, dest) = decode_msg(packet)?;
       socket.send_to(&data, dest).await?;
     }
-    Result::Ok(())
+    Ok(())
   };
-  Ok(())
+
+  tokio::select! {
+     res = f1 => res,
+     res = f2 => res
+  }
 }
 
 async fn tcp_server_handler(bind_port: u16, quic_connection: Connection) -> Result<()> {
@@ -115,26 +111,21 @@ async fn tcp_server_handler(bind_port: u16, quic_connection: Connection) -> Resu
     let inner_connection = quic_connection.clone();
 
     tokio::spawn(async move {
-      let (mut quic_tx, mut quic_rx) = match inner_connection.open_bi().await {
-        Ok(socket) => socket,
-        Err(e) => {
-          error!("{:?}", e);
-          return;
+      let res = async move {
+        let (mut quic_tx, mut quic_rx) = inner_connection.open_bi().await?;
+        let (mut tcp_rx, mut tcp_tx) = socket.split();
+
+        let f1 = tokio::io::copy(&mut quic_rx, &mut tcp_tx);
+        let f2 = tokio::io::copy(&mut tcp_rx, &mut quic_tx);
+
+        tokio::select! {
+          res = f1 => res,
+          res = f2 => res
         }
       };
 
-      let (mut tcp_rx, mut tcp_tx) = socket.split();
-
-      let f1 = tokio::io::copy(&mut quic_rx, &mut tcp_tx);
-      let f2 = tokio::io::copy(&mut tcp_rx, &mut quic_tx);
-
-      let res = tokio::select! {
-          res = f1 => res,
-          res = f2 => res
-      };
-
-      if let Err(e) = res {
-        error!("{:?}", e)
+      if let Err(e) = res.await {
+        error!("{}", e)
       }
     });
   };
