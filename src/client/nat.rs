@@ -39,9 +39,7 @@ impl NatMapping {
     let guard = self.map.read().await;
 
     match guard.get(&remote_addr) {
-      Some(tx) => {
-        tx.send(data).await
-      }
+      Some(tx) => tx.send(data).await,
       None => {
         drop(guard);
 
@@ -53,12 +51,9 @@ impl NatMapping {
           self.timeout,
         );
 
-        let res = sock.send(data).await;
-
-        if let Ok(_) = res {
-          self.map.write().await.insert(remote_addr, sock);
-        }
-        res
+        sock.send(data).await?;
+        self.map.write().await.insert(remote_addr, sock);
+        Ok(())
       }
     }
   }
@@ -102,7 +97,7 @@ impl ProxySocket {
       };
 
       let f2 = async {
-        let mut buff = [0u8; 65535];
+        let mut buff = [0u8; 65536];
 
         while let Ok(len) = sock.recv(&mut buff).await {
           *latest_time.write() = Instant::now();
@@ -117,7 +112,6 @@ impl ProxySocket {
           tokio::time::sleep(timeout).await;
 
           if latest_time.read().elapsed() >= timeout {
-            map.write().await.remove(&remote_addr);
             return Result::Ok(());
           }
         }
@@ -128,6 +122,8 @@ impl ProxySocket {
         res = f2 => res,
         res = f3 => res
       };
+
+      map.write().await.remove(&remote_addr);
 
       if let Err(e) = res {
         error!("{}", e)

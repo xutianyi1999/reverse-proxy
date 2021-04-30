@@ -1,11 +1,11 @@
 use std::net::SocketAddr;
 
 use futures::StreamExt;
-use quinn::{Connection, Datagrams, Endpoint, IncomingBiStreams};
+use quinn::{Datagrams, Endpoint, IncomingBiStreams};
 use tokio::io::{AsyncWriteExt, Error, ErrorKind, Result};
 use tokio::net::TcpStream;
 use tokio::sync::Notify;
-use tokio::time::Duration;
+use tokio::time::{Duration, sleep};
 
 use crate::client::nat::NatMapping;
 use crate::commons::{decode_msg, HEARTBEAT, InitConfig, OptionConvert, ProxyConfig, quic_config, StdResAutoConvert, StdResConvert};
@@ -19,7 +19,7 @@ pub async fn start(server_addr: &str, cert_path: &str, server_name: &str, list: 
 
   builder.default_client_config(client_config);
 
-  let bind_addr: SocketAddr = "0.0.0.0:0".parse().res_auto_convert()?;
+  let bind_addr: SocketAddr = "0.0.0.0:0".parse().unwrap();
   let (endpoint, _) = builder.bind(&bind_addr)
     .res_convert(|_| "client bind error".to_string())?;
 
@@ -73,9 +73,18 @@ async fn process(endpoint: &Endpoint, server_addr: SocketAddr,
   uni.write_u16(init_config_data.len() as u16).await?;
   uni.write_all(&init_config_data).await?;
 
+  let nat_op = if init_config.protocol == commons::UDP {
+    let timeout = Duration::from_secs(300);
+    Some(NatMapping::new(proxy_addr, timeout, connection))
+  } else {
+    None
+  };
+
+  let inner_nat = nat_op.as_ref();
+
   let f1 = async move {
     match init_config.protocol {
-      commons::UDP => udp_handler(connection, datagrams, proxy_addr).await,
+      commons::UDP => udp_handler(inner_nat.unwrap(), datagrams).await,
       commons::TCP => tcp_handler(bi_streams, proxy_addr).await,
       _ => return Err(Error::new(ErrorKind::Other, format!("{:?} config error", server_addr)))
     }
@@ -83,34 +92,28 @@ async fn process(endpoint: &Endpoint, server_addr: SocketAddr,
 
   let f2 = async move {
     loop {
+      sleep(Duration::from_secs(3)).await;
       uni.write_u8(HEARTBEAT).await?;
     }
   };
 
-  tokio::select! {
+  let res = tokio::select! {
     res = f1 => res,
     res = f2 => res
-  }
-}
-
-async fn udp_handler(connection: Connection, mut datagrams: Datagrams, proxy_addr: SocketAddr) -> Result<()> {
-  let timeout = Duration::from_secs(300);
-  let nat = NatMapping::new(proxy_addr, timeout, connection);
-
-  let res = async {
-    while let Some(res) = datagrams.next().await {
-      let packet = res?;
-      let (data, remote_addr) = decode_msg(packet)?;
-      nat.send(remote_addr, data.to_vec()).await?;
-    }
-    Result::Ok(())
   };
 
-  if let Err(e) = res.await {
-    error!("{}", e)
-  }
+  if let Some(nat) = nat_op {
+    nat.drop().await;
+  };
+  res
+}
 
-  nat.drop().await;
+async fn udp_handler(nat: &NatMapping, mut datagrams: Datagrams) -> Result<()> {
+  while let Some(res) = datagrams.next().await {
+    let packet = res?;
+    let (data, remote_addr) = decode_msg(packet)?;
+    nat.send(remote_addr, data.to_vec()).await?;
+  }
   Ok(())
 }
 
