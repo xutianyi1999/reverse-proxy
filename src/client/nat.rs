@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use quinn::Connection;
@@ -19,6 +20,7 @@ pub struct NatMapping {
   map: Mapping,
   timeout: Duration,
   connection: Connection,
+  is_closed: Arc<AtomicBool>,
 }
 
 struct ProxySocket {
@@ -32,6 +34,7 @@ impl NatMapping {
       map: Arc::new(RwLock::new(HashMap::new())),
       timeout,
       connection,
+      is_closed: Arc::new(AtomicBool::new(false)),
     }
   }
 
@@ -49,6 +52,7 @@ impl NatMapping {
           self.connection.clone(),
           self.map.clone(),
           self.timeout,
+          self.is_closed.clone(),
         );
 
         sock.send(data).await?;
@@ -59,16 +63,20 @@ impl NatMapping {
   }
 
   pub async fn drop(&self) -> () {
+    self.is_closed.store(true, Ordering::SeqCst);
     self.map.write().await.clear();
   }
 }
 
 impl ProxySocket {
-  fn new(local_addr: SocketAddr,
-         remote_addr: SocketAddr,
-         connection: Connection,
-         map: Arc<RwLock<HashMap<SocketAddr, ProxySocket>>>,
-         timeout: Duration) -> Self {
+  fn new(
+    local_addr: SocketAddr,
+    remote_addr: SocketAddr,
+    connection: Connection,
+    map: Arc<RwLock<HashMap<SocketAddr, ProxySocket>>>,
+    timeout: Duration,
+    parent_is_closed: Arc<AtomicBool>,
+  ) -> Self {
     let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(50);
     let proxy_socket = ProxySocket { tx };
 
@@ -123,7 +131,9 @@ impl ProxySocket {
         res = f3 => res
       };
 
-      map.write().await.remove(&remote_addr);
+      if !parent_is_closed.load(Ordering::SeqCst) {
+        map.write().await.remove(&remote_addr);
+      }
 
       if let Err(e) = res {
         error!("{}", e)

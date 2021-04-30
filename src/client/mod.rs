@@ -23,7 +23,7 @@ pub async fn start(server_addr: &str, cert_path: &str, server_name: &str, list: 
   let (endpoint, _) = builder.bind(&bind_addr)
     .res_convert(|_| "client bind error".to_string())?;
 
-  let server_addr = tokio::net::lookup_host(server_addr).await?.next().option_to_res("Address error")?;
+  let server_addr = tokio::net::lookup_host(server_addr).await?.next().option_to_res("Server Address error")?;
 
   for proxy_config in list {
     let server_name = server_name.to_string();

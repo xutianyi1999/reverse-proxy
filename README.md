@@ -35,7 +35,7 @@
 - cert_path: PEM编码证书路径
 - server_name: subjectAltName
 - proxy: 本地需代理的服务地址
-  - protocol: 代理协议(目前仅支持TCP)
+  - protocol: 代理协议(TCP/UDP)
   - proxy_addr: 本地服务地址
   - remote_port: 映射在远端的端口
 
