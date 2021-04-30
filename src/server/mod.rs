@@ -88,7 +88,10 @@ async fn udp_server_handler(bind_port: u16, quic_connection: Connection, mut dat
     while let Some(res) = datagram.next().await {
       let packet = res?;
       let (data, dest) = decode_msg(packet)?;
-      socket.send_to(&data, dest).await?;
+
+      if let Err(e) = socket.send_to(&data, dest).await {
+        error!("{}", e)
+      }
     }
     Ok(())
   };

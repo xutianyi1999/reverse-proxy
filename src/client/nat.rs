@@ -81,62 +81,54 @@ impl ProxySocket {
     let proxy_socket = ProxySocket { tx };
 
     tokio::spawn(async move {
-      let sock = match UdpSocket::bind((IpAddr::from([0, 0, 0, 0]), 0)).await {
-        Ok(sock) => sock,
-        Err(e) => {
-          error!("{}", e);
-          return;
-        }
-      };
+      let res = async move {
+        let sock = UdpSocket::bind((IpAddr::from([0, 0, 0, 0]), 0)).await?;
+        sock.connect(local_addr).await?;
 
-      if let Err(e) = sock.connect(local_addr).await {
-        error!("{}", e);
-        return;
-      }
+        let latest_time = parking_lot::RwLock::new(Instant::now());
 
-      let latest_time = parking_lot::RwLock::new(Instant::now());
-
-      let f1 = async {
-        while let Some(packet) = rx.recv().await {
-          *latest_time.write() = Instant::now();
-          sock.send(&packet).await?;
-        }
-        Result::Ok(())
-      };
-
-      let f2 = async {
-        let mut buff = [0u8; 65536];
-
-        while let Ok(len) = sock.recv(&mut buff).await {
-          *latest_time.write() = Instant::now();
-          let data = encode_msg(&buff[..len], remote_addr);
-          connection.send_datagram(data).res_convert(|_| "Send datagram error".to_string())?;
-        }
-        Result::Ok(())
-      };
-
-      let f3 = async {
-        loop {
-          tokio::time::sleep(timeout).await;
-
-          if latest_time.read().elapsed() >= timeout {
-            return Result::Ok(());
+        let f1 = async {
+          while let Some(packet) = rx.recv().await {
+            *latest_time.write() = Instant::now();
+            sock.send(&packet).await?;
           }
+          Result::Ok(())
+        };
+
+        let f2 = async {
+          let mut buff = [0u8; 65536];
+
+          while let Ok(len) = sock.recv(&mut buff).await {
+            *latest_time.write() = Instant::now();
+            let data = encode_msg(&buff[..len], remote_addr);
+            connection.send_datagram(data).res_convert(|_| "Send datagram error".to_string())?;
+          }
+          Result::Ok(())
+        };
+
+        let f3 = async {
+          loop {
+            tokio::time::sleep(timeout).await;
+
+            if latest_time.read().elapsed() >= timeout {
+              return Result::Ok(());
+            }
+          }
+        };
+
+        tokio::select! {
+          res = f1 => res,
+          res = f2 => res,
+          res = f3 => res
         }
       };
 
-      let res = tokio::select! {
-        res = f1 => res,
-        res = f2 => res,
-        res = f3 => res
-      };
+      if let Err(e) = res.await {
+        error!("{}", e)
+      }
 
       if !parent_is_closed.load(Ordering::SeqCst) {
         map.write().await.remove(&remote_addr);
-      }
-
-      if let Err(e) = res {
-        error!("{}", e)
       }
     });
 

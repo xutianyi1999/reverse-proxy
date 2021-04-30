@@ -112,7 +112,10 @@ async fn udp_handler(nat: &NatMapping, mut datagrams: Datagrams) -> Result<()> {
   while let Some(res) = datagrams.next().await {
     let packet = res?;
     let (data, remote_addr) = decode_msg(packet)?;
-    nat.send(remote_addr, data.to_vec()).await?;
+
+    if let Err(e) = nat.send(remote_addr, data.to_vec()).await {
+      error!("{}", e)
+    }
   }
   Ok(())
 }
