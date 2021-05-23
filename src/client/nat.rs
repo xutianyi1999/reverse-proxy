@@ -96,7 +96,7 @@ impl ProxySocket {
         };
 
         let f2 = async {
-          let mut buff = [0u8; 65536];
+          let mut buff = vec![0u8; 65536];
 
           while let Ok(len) = sock.recv(&mut buff).await {
             *latest_time.write() = Instant::now();

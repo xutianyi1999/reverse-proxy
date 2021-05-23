@@ -74,7 +74,7 @@ async fn udp_server_handler(bind_port: u16, quic_connection: Connection, mut dat
   let socket = UdpSocket::bind(("0.0.0.0", bind_port)).await?;
 
   let f1 = async {
-    let mut buff = [0u8; 65536];
+    let mut buff = vec![0u8; 65536];
 
     while let Ok((len, dest_addr)) = socket.recv_from(&mut buff).await {
       let data_slice = &buff[..len];
